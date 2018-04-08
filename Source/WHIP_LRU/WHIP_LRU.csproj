@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
@@ -8,13 +8,15 @@
     <RootNamespace>WHIP_LRU</RootNamespace>
     <AssemblyName>WHIP_LRU</AssemblyName>
     <TargetFrameworkVersion>v4.6.1</TargetFrameworkVersion>
+    <NuGetPackageImportStamp>
+    </NuGetPackageImportStamp>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
     <Optimize>false</Optimize>
     <OutputPath>..\..\bin</OutputPath>
     <WarningLevel>4</WarningLevel>
     <CheckForOverflowUnderflow>true</CheckForOverflowUnderflow>
-    <LangVersion>6</LangVersion>
+    <LangVersion>Default</LangVersion>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
@@ -23,9 +25,30 @@
     <DefineConstants>DEBUG;</DefineConstants>
     <WarningLevel>4</WarningLevel>
     <CheckForOverflowUnderflow>true</CheckForOverflowUnderflow>
-    <LangVersion>6</LangVersion>
+    <LangVersion>Default</LangVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
+    <OutputPath>bin\x64\Release\</OutputPath>
+    <CheckForOverflowUnderflow>true</CheckForOverflowUnderflow>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>Default</LangVersion>
+    <CodeAnalysisRuleSet>MinimumRecommendedRules.ruleset</CodeAnalysisRuleSet>
+    <Prefer32Bit>true</Prefer32Bit>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
+    <DebugSymbols>true</DebugSymbols>
+    <OutputPath>..\..\bin\</OutputPath>
+    <DefineConstants>DEBUG;</DefineConstants>
+    <CheckForOverflowUnderflow>true</CheckForOverflowUnderflow>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>Default</LangVersion>
+    <CodeAnalysisRuleSet>MinimumRecommendedRules.ruleset</CodeAnalysisRuleSet>
+    <Prefer32Bit>true</Prefer32Bit>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="protobuf-net, Version=2.3.6.0, Culture=neutral, PublicKeyToken=257b51d87d2e4d67, processorArchitecture=MSIL">
+      <HintPath>..\..\packages\protobuf-net.2.3.6\lib\net40\protobuf-net.dll</HintPath>
+    </Reference>
     <Reference Include="System" />
     <Reference Include="log4net">
       <HintPath>..\..\packages\log4net.2.0.8\lib\net45-full\log4net.dll</HintPath>
@@ -33,33 +56,18 @@
     <Reference Include="Nini">
       <HintPath>..\..\packages\Trove.Nini.1.1.0.0\lib\net20\Nini.dll</HintPath>
     </Reference>
-    <Reference Include="InWorldz.Whip.Client">
-      <HintPath>..\..\packages\InWorldz.Whip.Client.1.0.1\lib\net45\InWorldz.Whip.Client.dll</HintPath>
-    </Reference>
     <Reference Include="Flurl.Http">
       <HintPath>..\..\packages\Flurl.Http.Signed.0.7.0\lib\net45\Flurl.Http.dll</HintPath>
     </Reference>
     <Reference Include="Marvin.JsonPatch">
       <HintPath>..\..\packages\Marvin.JsonPatch.Signed.0.7.0\lib\portable-net40+win+wpa81\Marvin.JsonPatch.dll</HintPath>
     </Reference>
+    <Reference Include="System.Web.Extensions" />
     <Reference Include="System.Xml" />
-    <Reference Include="Mono.Posix" />
     <Reference Include="Newtonsoft.Json">
       <HintPath>..\..\packages\Newtonsoft.Json.9.0.1\lib\net45\Newtonsoft.Json.dll</HintPath>
     </Reference>
-    <Reference Include="protobuf-net">
-      <HintPath>..\..\packages\protobuf-net.2.3.2\lib\net40\protobuf-net.dll</HintPath>
-    </Reference>
-    <Reference Include="LibreMetaverse.Types">
-      <HintPath>..\..\packages\LibreMetaverse.Types.1.2.0.146\lib\net461\LibreMetaverse.Types.dll</HintPath>
-    </Reference>
-    <Reference Include="LibreMetaverse.StructuredData">
-      <HintPath>..\..\packages\LibreMetaverse.StructuredData.1.2.0.146\lib\net461\LibreMetaverse.StructuredData.dll</HintPath>
-    </Reference>
     <Reference Include="System.Core" />
-    <Reference Include="System.Reflection.TypeExtensions">
-      <HintPath>..\..\packages\System.Reflection.TypeExtensions.4.1.0\lib\net46\System.Reflection.TypeExtensions.dll</HintPath>
-    </Reference>
     <Reference Include="mscorlib" />
     <Reference Include="Flurl">
       <HintPath>..\..\packages\Flurl.Signed.2.3.0\lib\netstandard1.4\Flurl.dll</HintPath>
@@ -73,11 +81,42 @@
     <Reference Include="zlib.net">
       <HintPath>..\..\packages\zlib.net-mutliplatform.1.0.4\lib\net461\zlib.net.dll</HintPath>
     </Reference>
+    <Reference Include="InWorldz.Whip.Client">
+      <HintPath>..\..\packages\InWorldz.Whip.Client.1.1.0.6\lib\net461\InWorldz.Whip.Client.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Reflection.TypeExtensions">
+      <HintPath>..\..\packages\System.Reflection.TypeExtensions.4.4.0\lib\net461\System.Reflection.TypeExtensions.dll</HintPath>
+    </Reference>
+    <Reference Include="Mono.Posix" />
+    <Reference Include="System.Configuration" />
+    <Reference Include="System.Runtime.Serialization" />
+    <Reference Include="System.ServiceModel" />
+    <Reference Include="LibreMetaverse.Types">
+      <HintPath>..\..\packages\LibreMetaverse.Types.1.2.5.188\lib\net461\LibreMetaverse.Types.dll</HintPath>
+    </Reference>
+    <Reference Include="LibreMetaverse.StructuredData">
+      <HintPath>..\..\packages\LibreMetaverse.StructuredData.1.2.5.188\lib\net461\LibreMetaverse.StructuredData.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Security.Cryptography.Encoding">
+      <HintPath>..\..\packages\System.Security.Cryptography.Encoding.4.3.0\lib\net46\System.Security.Cryptography.Encoding.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Security.Cryptography.Primitives">
+      <HintPath>..\..\packages\System.Security.Cryptography.Primitives.4.3.0\lib\net46\System.Security.Cryptography.Primitives.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Net.Http">
+      <HintPath>..\..\packages\System.Net.Http.4.3.3\lib\net46\System.Net.Http.dll</HintPath>
+    </Reference>
     <Reference Include="LibreMetaverse">
-      <HintPath>..\..\packages\LibreMetaverse.1.2.0.146\lib\net461\LibreMetaverse.dll</HintPath>
+      <HintPath>..\..\packages\LibreMetaverse.1.2.5.188\lib\net461\LibreMetaverse.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Security.Cryptography.Algorithms">
+      <HintPath>..\..\packages\System.Security.Cryptography.Algorithms.4.3.1\lib\net461\System.Security.Cryptography.Algorithms.dll</HintPath>
+    </Reference>
+    <Reference Include="System.Security.Cryptography.X509Certificates">
+      <HintPath>..\..\packages\System.Security.Cryptography.X509Certificates.4.3.2\lib\net461\System.Security.Cryptography.X509Certificates.dll</HintPath>
     </Reference>
     <Reference Include="Chattel">
-      <HintPath>..\..\packages\Chattel.1.2.1.25\lib\net461\Chattel.dll</HintPath>
+      <HintPath>..\..\packages\Chattel.2.1.1.104\lib\net461\Chattel.dll</HintPath>
     </Reference>
   </ItemGroup>
   <ItemGroup>
@@ -92,10 +131,17 @@
     </None>
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\LibWhipLru\LibWhipLru.csproj">
+    <ProjectReference Include="..\LibWhipLru\LibWhipLru.csproj">
       <Project>{C8143368-E4E5-430E-8E21-EE78A923F4DF}</Project>
       <Name>LibWhipLru</Name>
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />
+  <Import Project="..\..\packages\Mono.Posix.5.4.0.201\build\net45\Mono.Posix.targets" Condition="'$(OS)'=='Windows_NT' And Exists('..\..\packages\Mono.Posix.5.4.0.201\build\net45\Mono.Posix.targets')" />
+  <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild" Condition="'$(OS)'=='Windows_NT'">
+    <PropertyGroup>
+      <ErrorText>This project references NuGet package(s) that are missing on this computer. Use NuGet Package Restore to download them.  For more information, see http://go.microsoft.com/fwlink/?LinkID=322105. The missing file is {0}.</ErrorText>
+    </PropertyGroup>
+    <Error Condition="!Exists('..\..\packages\Mono.Posix.5.4.0.201\build\net45\Mono.Posix.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\..\packages\Mono.Posix.5.4.0.201\build\net45\Mono.Posix.targets'))" />
+  </Target>
 </Project>

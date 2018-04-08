@@ -31,17 +31,24 @@ using LibWhipLru;
 using log4net.Config;
 using Nini.Config;
 using NUnit.Framework;
-using LibWhipLru.Server;
 
 namespace UnitTests {
 	[SetUpFixture]
 	public sealed class Setup {
+		private readonly string DATABASE_FOLDER_PATH = Path.Combine(TestContext.CurrentContext.TestDirectory, "test");
+		private const ulong DATABASE_MAX_SIZE_BYTES = uint.MaxValue;
+		private readonly string WRITE_CACHE_FILE_PATH = Path.Combine(TestContext.CurrentContext.TestDirectory, "test.whipwcache");
+		private const uint WRITE_CACHE_MAX_RECORD_COUNT = 8;
+
 		private WhipLru _service;
 
 		[OneTimeSetUp]
 		public void Init() {
 			// Configure Log4Net
 			XmlConfigurator.Configure(new FileInfo(Constants.LOG_CONFIG_PATH));
+
+			// Set CWD so that native libs are found.
+			Directory.SetCurrentDirectory(TestContext.CurrentContext.TestDirectory);
 
 			// Load INI stuff
 			var configSource = new ArgvConfigSource(new string[] { });
@@ -59,13 +66,48 @@ namespace UnitTests {
 			// Read in the ini file
 			configSource.Merge(new IniConfigSource(Constants.INI_PATH));
 
+#pragma warning disable RECS0022 // A catch clause that catches System.Exception and has an empty body
+			try {
+				Directory.Delete(DATABASE_FOLDER_PATH, true);
+			}
+			catch (Exception) {
+			}
+			try {
+				File.Delete(WRITE_CACHE_FILE_PATH);
+			}
+			catch (Exception) {
+			}
+#pragma warning restore RECS0022 // A catch clause that catches System.Exception and has an empty body
+			Directory.CreateDirectory(DATABASE_FOLDER_PATH);
+
 			// Start booting server
 			var pidFileManager = new LibWhipLru.Util.PIDFileManager(Constants.PID_FILE_PATH);
 
-			var chattelConfigRead = new ChattelConfiguration(configSource, configSource.Configs["AssetsRead"]);
-			var chattelConfigWrite = new ChattelConfiguration(configSource, configSource.Configs["AssetsWrite"]);
+			var chattelConfigRead = new ChattelConfiguration(DATABASE_FOLDER_PATH);
+			var chattelConfigWrite = new ChattelConfiguration(DATABASE_FOLDER_PATH);
 
-			_service = new WhipLru(Constants.SERVICE_ADDRESS, Constants.SERVICE_PORT, Constants.PASSWORD, pidFileManager, chattelConfigRead, chattelConfigWrite);
+			var readerLocalStorage = new LibWhipLru.Cache.AssetLocalStorageLmdbPartitionedLRU(
+				chattelConfigRead,
+				DATABASE_MAX_SIZE_BYTES,
+				TimeSpan.FromSeconds(1)
+			);
+			var chattelReader = new ChattelReader(chattelConfigRead, readerLocalStorage);
+			var chattelWriter = new ChattelWriter(chattelConfigWrite, readerLocalStorage);
+
+			var storageManager = new LibWhipLru.Cache.StorageManager(
+				readerLocalStorage,
+				TimeSpan.FromMinutes(2),
+				chattelReader,
+				chattelWriter
+			);
+
+			_service = new WhipLru(
+				Constants.SERVICE_ADDRESS,
+				Constants.SERVICE_PORT,
+				Constants.PASSWORD,
+				pidFileManager,
+				storageManager
+			);
 
 			_service.Start();
 		}
@@ -76,8 +118,21 @@ namespace UnitTests {
 
 			Thread.Sleep(500);
 
-			// Clear the PID file if it exists. 
+			// Clear the PID file if it exists.
 			File.Delete(Constants.PID_FILE_PATH);
+
+#pragma warning disable RECS0022 // A catch clause that catches System.Exception and has an empty body
+			try {
+				Directory.Delete(DATABASE_FOLDER_PATH, true);
+			}
+			catch (Exception) {
+			}
+			try {
+				File.Delete(WRITE_CACHE_FILE_PATH);
+			}
+			catch (Exception) {
+			}
+#pragma warning restore RECS0022 // A catch clause that catches System.Exception and has an empty body
 		}
 	}
 }

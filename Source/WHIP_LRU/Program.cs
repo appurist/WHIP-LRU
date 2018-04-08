@@ -11,20 +11,43 @@ using Mono.Unix.Native;
 using Nini.Config;
 using LibWhipLru.Server;
 using LibWhipLru.Util;
+using LibWhipLru.Cache;
+using System.Linq;
+using System.Collections.Generic;
+using System.Net.Sockets;
 
 namespace WHIP_LRU {
-	class Application {
+	static class Application {
 		private static readonly ILog LOG = LogManager.GetLogger(MethodBase.GetCurrentMethod().DeclaringType);
 
-		private static readonly string EXECUTABLE_DIRECTORY = Path.GetDirectoryName(Assembly.GetEntryAssembly().CodeBase.Replace("file:/", string.Empty));
+		private static readonly bool ON_POSIX_COMPLAINT_OS = Type.GetType("Mono.Runtime") != null; // A potentially invalid assumption: that Mono means running on a POSIX-compliant system.
+
+		private static readonly string EXECUTABLE_DIRECTORY = Path.GetDirectoryName(Assembly.GetEntryAssembly().CodeBase.Replace(ON_POSIX_COMPLAINT_OS ? "file:/" : "file:///", string.Empty));
 
 		private static readonly string DEFAULT_INI_FILE = Path.Combine(EXECUTABLE_DIRECTORY, "WHIP_LRU.ini");
 
 		private static readonly string COMPILED_BY = "?mono?"; // Replaced during automatic packaging.
 
+		private static readonly string DEFAULT_DB_FOLDER_PATH = "";
+
+		private static readonly string DEFAULT_WRITECACHE_FILE_PATH = "";
+
+		private static readonly uint DEFAULT_WRITECACHE_RECORD_COUNT = 1024U * 1024U * 1024U/*1GB*/ / 17 /*WriteCacheNode.BYTE_SIZE*/;
+
+		private static readonly uint DEFAULT_DB_PARTITION_INTERVAL_MINUTES = 60 * 24/*1day*/;
+
+		private static readonly Dictionary<string, IAssetServer> _assetServersByName = new Dictionary<string, IAssetServer>();
+
 		public static int Main(string[] args) {
 			// First line, hook the appdomain to the crash reporter
 			AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
+
+			var waitHandle = new EventWaitHandle(false, EventResetMode.AutoReset, "70a9f94f-59e8-4073-93ab-00aaacc26111", out var createdNew);
+
+			if (!createdNew) {
+				LOG.Error("Server process already started, please stop that server first.");
+				return 2;
+			}
 
 			// Add the arguments supplied when running the application to the configuration
 			var configSource = new ArgvConfigSource(args);
@@ -33,22 +56,25 @@ namespace WHIP_LRU {
 			configSource.AddSwitch("Startup", "inifile");
 			configSource.AddSwitch("Startup", "logconfig");
 			configSource.AddSwitch("Startup", "pidfile");
+			configSource.AddSwitch("Startup", "purge");
 
 			var startupConfig = configSource.Configs["Startup"];
 
 			var pidFileManager = new PIDFileManager(startupConfig.GetString("pidfile", string.Empty));
 
 			// Configure Log4Net
-			var logConfigFile = startupConfig.GetString("logconfig", string.Empty);
-			if (string.IsNullOrEmpty(logConfigFile)) {
-				XmlConfigurator.Configure();
-				LogBootMessage();
-				LOG.Info("Configured log4net using ./WHIP_LRU.exe.config as the default.");
-			}
-			else {
-				XmlConfigurator.Configure(new FileInfo(logConfigFile));
-				LogBootMessage();
-				LOG.Info($"Configured log4net using \"{logConfigFile}\" as configuration file.");
+			{
+				var logConfigFile = startupConfig.GetString("logconfig", string.Empty);
+				if (string.IsNullOrEmpty(logConfigFile)) {
+					XmlConfigurator.Configure();
+					LogBootMessage();
+					LOG.Info("Configured log4net using ./WHIP_LRU.exe.config as the default.");
+				}
+				else {
+					XmlConfigurator.Configure(new FileInfo(logConfigFile));
+					LogBootMessage();
+					LOG.Info($"Configured log4net using \"{logConfigFile}\" as configuration file.");
+				}
 			}
 
 			// Configure nIni aliases and locale
@@ -65,47 +91,117 @@ namespace WHIP_LRU {
 			WhipLru whipLru = null;
 
 			// Handlers for signals.
-			Console.CancelKeyPress += delegate {
-				LOG.Debug("CTRL-C pressed, terminating.");
-				isRunning = false;
-				whipLru?.Stop();
-			};
+			UnixSignal[] signals = null;
+			if (ON_POSIX_COMPLAINT_OS) {
+				signals = new [] {
+					new UnixSignal(Signum.SIGINT),
+					new UnixSignal(Signum.SIGTERM),
+					new UnixSignal(Signum.SIGHUP),
+				};
+			}
+			else {
+				Console.CancelKeyPress += (sender, cargs) => {
+					LOG.Debug("CTRL-C pressed, terminating.");
+					isRunning = false;
+					whipLru?.Stop();
 
-			var signals = new UnixSignal[]{
-				new UnixSignal(Signum.SIGINT),
-				new UnixSignal(Signum.SIGTERM),
-				new UnixSignal(Signum.SIGHUP),
-			};
+					cargs.Cancel = true;
+					waitHandle.Set();
+				};
+			}
 
 			while (isRunning) {
+				// Dump any known servers, we're going to reconfigure them.
+				foreach (var server in _assetServersByName.Values) {
+					server.Dispose();
+				}
+				// TODO: might need to double buffer these, or something, so that old ones can finish out before being disposed.
+
 				// Read in the ini file
 				ReadConfigurationFromINI(configSource);
 
-				var chattelConfigRead = new ChattelConfiguration(configSource, configSource.Configs["AssetsRead"]);
-				var chattelConfigWrite = new ChattelConfiguration(configSource, configSource.Configs["AssetsWrite"]);
+				// Read in a config list that lists the priority order of servers and their settings.
+
+				var configRead = configSource.Configs["AssetsRead"];
+				var configWrite = configSource.Configs["AssetsWrite"];
+
+				var serversRead = GetServers(configSource, configRead, _assetServersByName);
+				var serversWrite = GetServers(configSource, configWrite, _assetServersByName);
+
+				var localStorageConfig = configSource.Configs["LocalStorage"];
+
+				var chattelConfigRead = GetConfig(localStorageConfig, serversRead);
+				var chattelConfigWrite = GetConfig(localStorageConfig, serversWrite);
 
 				var serverConfig = configSource.Configs["Server"];
 
-				var address = serverConfig.GetString("Address", WHIPServer.DEFAULT_ADDRESS);
-				var port = (uint)serverConfig.GetInt("Port", (int)WHIPServer.DEFAULT_PORT);
-				var password = serverConfig.GetString("Password", WHIPServer.DEFAULT_PASSWORD);
+				var address = serverConfig?.GetString("Address", WHIPServer.DEFAULT_ADDRESS) ?? WHIPServer.DEFAULT_ADDRESS;
+				var port = (uint?)serverConfig?.GetInt("Port", (int)WHIPServer.DEFAULT_PORT) ?? WHIPServer.DEFAULT_PORT;
+				var password = serverConfig?.GetString("Password", WHIPServer.DEFAULT_PASSWORD);
+				if (password == null) { // Would only be null if serverConfig was null or DEFAULT_PASSWORD is null.  Why not use the ?? operator? Compiler didn't like it.
+					password = WHIPServer.DEFAULT_PASSWORD;
+				}
+				var listenBacklogLength = (uint?)serverConfig?.GetInt("ConnectionQueueLength", (int)WHIPServer.DEFAULT_BACKLOG_LENGTH) ?? WHIPServer.DEFAULT_BACKLOG_LENGTH;
 
-				whipLru = new WhipLru(address, port, password, pidFileManager, chattelConfigRead, chattelConfigWrite);
+				var maxAssetLocalStorageDiskSpaceByteCount = (ulong?)localStorageConfig?.GetLong("MaxDiskSpace", (long)AssetLocalStorageLmdbPartitionedLRU.DB_MAX_DISK_BYTES_MIN_RECOMMENDED) ?? AssetLocalStorageLmdbPartitionedLRU.DB_MAX_DISK_BYTES_MIN_RECOMMENDED;
+				var negativeCacheItemLifetime = TimeSpan.FromSeconds((uint?)localStorageConfig?.GetInt("NegativeCacheItemLifetimeSeconds", (int)StorageManager.DEFAULT_NC_LIFETIME_SECONDS) ?? StorageManager.DEFAULT_NC_LIFETIME_SECONDS);
+				var partitionInterval = TimeSpan.FromMinutes((uint?)localStorageConfig?.GetInt("MinutesBetweenDatabasePartitions", (int)DEFAULT_DB_PARTITION_INTERVAL_MINUTES) ?? DEFAULT_DB_PARTITION_INTERVAL_MINUTES);
+
+				var purgeAll = startupConfig.GetString("purge", string.Empty) == "all";
+				if (purgeAll) {
+					LOG.Info("CLI request to purge all assets on startup specified.");
+				}
+
+				var readerLocalStorage = new AssetLocalStorageLmdbPartitionedLRU(
+					chattelConfigRead,
+					maxAssetLocalStorageDiskSpaceByteCount,
+					partitionInterval
+				);
+				var chattelReader = new ChattelReader(chattelConfigRead, readerLocalStorage, purgeAll);
+				var chattelWriter = new ChattelWriter(chattelConfigWrite, readerLocalStorage, purgeAll);
+
+				var storageManager = new StorageManager(
+					readerLocalStorage,
+					negativeCacheItemLifetime,
+					chattelReader,
+					chattelWriter
+				);
+
+				whipLru = new WhipLru(
+					address,
+					port,
+					password,
+					pidFileManager,
+					storageManager,
+					listenBacklogLength
+				);
 
 				whipLru.Start();
 
-				var signalIndex = UnixSignal.WaitAny(signals, -1);
+				if (signals != null) {
+					var signalIndex = UnixSignal.WaitAny(signals, -1);
 
-				switch (signals[signalIndex].Signum) {
-					case Signum.SIGHUP:
-						whipLru.Stop();
-					break;
-					case Signum.SIGINT:
-					case Signum.SIGKILL:
-						isRunning = false;
-						whipLru.Stop();
-					break;
+					switch (signals[signalIndex].Signum) {
+						case Signum.SIGHUP:
+							whipLru.Stop();
+						break;
+						case Signum.SIGINT:
+						case Signum.SIGKILL:
+							isRunning = false;
+							whipLru.Stop();
+						break;
+						default:
+							// Signal unknown, ignore it.
+						break;
+					}
 				}
+				else {
+					waitHandle.WaitOne();
+				}
+			}
+
+			foreach (var server in _assetServersByName.Values) {
+				server.Dispose();
 			}
 
 			return 0;
@@ -155,9 +251,112 @@ namespace WHIP_LRU {
 				}
 				catch {
 					LOG.Fatal($"Failure reading configuration file at {Path.GetFullPath(iniFileName)}");
-					throw;
 				}
 			}
+		}
+
+		private static IEnumerable<IEnumerable<IAssetServer>> GetServers(IConfigSource configSource, IConfig assetConfig, Dictionary<string, IAssetServer> serverList) {
+			var serialParallelServerSources = assetConfig?
+				.GetString("Servers", string.Empty)
+				.Split(',')
+				.Where(parallelSources => !string.IsNullOrWhiteSpace(parallelSources))
+				.Select(parallelSources => parallelSources
+					.Split('&')
+					.Where(source => !string.IsNullOrWhiteSpace(source))
+					.Select(source => source.Trim())
+				)
+				.Where(parallelSources => parallelSources.Any())
+			;
+
+			var serialParallelAssetServers = new List<List<IAssetServer>>();
+
+			if (serialParallelServerSources != null && serialParallelServerSources.Any()) {
+				foreach (var parallelSources in serialParallelServerSources) {
+					var parallelServerConnectors = new List<IAssetServer>();
+					foreach (var sourceName in parallelSources) {
+						var sourceConfig = configSource.Configs[sourceName];
+						var type = sourceConfig?.GetString("Type", string.Empty)?.ToLower(System.Globalization.CultureInfo.InvariantCulture);
+
+						if (!serverList.TryGetValue(sourceName, out var serverConnector)) {
+							try {
+								switch (type) {
+									case "whip":
+										serverConnector = new AssetServerWHIP(
+											sourceName,
+											sourceConfig.GetString("Host", string.Empty),
+											sourceConfig.GetInt("Port", 32700),
+											sourceConfig.GetString("Password", "changeme") // Yes, that's the default password for WHIP.
+										);
+										break;
+									case "cf":
+										serverConnector = new AssetServerCF(
+											sourceName,
+											sourceConfig.GetString("Username", string.Empty),
+											sourceConfig.GetString("APIKey", string.Empty),
+											sourceConfig.GetString("DefaultRegion", string.Empty),
+											sourceConfig.GetBoolean("UseInternalURL", true),
+											sourceConfig.GetString("ContainerPrefix", string.Empty)
+										);
+										break;
+									default:
+										LOG.Warn($"Unknown asset server type in section [{sourceName}].");
+										break;
+								}
+
+								serverList.Add(sourceName, serverConnector);
+							}
+							catch (SocketException e) {
+								LOG.Error($"Asset server of type '{type}' defined in section [{sourceName}] failed setup. Skipping server.", e);
+							}
+						}
+
+						if (serverConnector != null) {
+							parallelServerConnectors.Add(serverConnector);
+						}
+					}
+
+					if (parallelServerConnectors.Any()) {
+						serialParallelAssetServers.Add(parallelServerConnectors);
+					}
+				}
+			}
+			else {
+				LOG.Warn("Servers empty or not specified. No asset server sections configured.");
+			}
+
+			return serialParallelAssetServers;
+		}
+
+		private static ChattelConfiguration GetConfig(IConfig localStorageConfig, IEnumerable<IEnumerable<IAssetServer>> serialParallelAssetServers) {
+			// Set up local storage
+			var localStoragePathRead = localStorageConfig?.GetString("DatabaseFolderPath", DEFAULT_DB_FOLDER_PATH) ?? DEFAULT_DB_FOLDER_PATH;
+
+			DirectoryInfo localStorageFolder = null;
+
+			if (string.IsNullOrWhiteSpace(localStoragePathRead)) {
+				LOG.Info($"DatabaseFolderPath is empty, local storage of assets disabled.");
+			}
+			else if (!Directory.Exists(localStoragePathRead)) {
+				LOG.Info($"DatabaseFolderPath folder does not exist, local storage of assets disabled.");
+			}
+			else {
+				localStorageFolder = new DirectoryInfo(localStoragePathRead);
+				LOG.Info($"Local storage of assets enabled at {localStorageFolder.FullName}");
+			}
+
+			// Set up write cache
+			var writeCachePath = localStorageConfig?.GetString("WriteCacheFilePath", DEFAULT_WRITECACHE_FILE_PATH) ?? DEFAULT_WRITECACHE_FILE_PATH;
+			var writeCacheRecordCount = (uint)Math.Max(0, localStorageConfig?.GetLong("WriteCacheRecordCount", DEFAULT_WRITECACHE_RECORD_COUNT) ?? DEFAULT_WRITECACHE_RECORD_COUNT);
+
+			if (string.IsNullOrWhiteSpace(writeCachePath) || writeCacheRecordCount <= 0 || localStorageFolder == null) {
+				LOG.Warn($"WriteCacheFilePath is empty, WriteCacheRecordCount is zero, or caching is disabled. Crash recovery will be compromised.");
+			}
+			else {
+				var writeCacheFile = new FileInfo(writeCachePath);
+				LOG.Info($"Write cache enabled at {writeCacheFile.FullName} with {writeCacheRecordCount} records.");
+			}
+
+			return new ChattelConfiguration(localStoragePathRead, writeCachePath, writeCacheRecordCount, serialParallelAssetServers);
 		}
 
 		#endregion
@@ -221,6 +420,19 @@ namespace WHIP_LRU {
 				_isHandlingException = false;
 
 				if (e.IsTerminating) {
+
+					foreach (var server in _assetServersByName.Values) {
+						try {
+							server.Dispose();
+						}
+#pragma warning disable RECS0022 // A catch clause that catches System.Exception and has an empty body
+						catch {
+							// Ignore.
+						}
+#pragma warning restore RECS0022 // A catch clause that catches System.Exception and has an empty body
+					}
+
+
 					// Preempt to not show a pile of puke if console was disabled.
 					Environment.Exit(1);
 				}
